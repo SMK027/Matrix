@@ -259,7 +259,10 @@ with open(cfg_path, 'w') as f:
 print('homeserver.yaml mis à jour : PostgreSQL, URL publique, options de sécurité.')
 PYEOF
 
+    # --entrypoint python3 : contourne l'entrypoint /start.py de l'image Synapse
+    # qui intercepterait "python3" comme un mode d'exécution inconnu.
     docker run --rm \
+        --entrypoint python3 \
         -v "$(pwd)/data/synapse:/data" \
         -v "${py_script}:/tmp/configure.py:ro" \
         -e "POSTGRES_USER=${POSTGRES_USER}" \
@@ -267,7 +270,7 @@ PYEOF
         -e "POSTGRES_DB=${POSTGRES_DB}" \
         -e "MATRIX_DOMAIN=${MATRIX_DOMAIN}" \
         -e "ALLOW_REGISTRATION=${SYNAPSE_ALLOW_REGISTRATION}" \
-        matrixdotorg/synapse:latest python3 /tmp/configure.py
+        matrixdotorg/synapse:latest /tmp/configure.py
 
     rm -f "${py_script}"
 
