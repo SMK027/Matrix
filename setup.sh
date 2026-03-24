@@ -170,7 +170,7 @@ start_nginx() {
     step "Démarrage de nginx (HTTP)"
     # Seul nginx démarre ici (pas de depends_on sur synapse), ce qui suffit
     # pour le challenge ACME webroot.
-    docker compose up -d nginx
+    sudo docker-compose up -d nginx
     sleep 3
     success "Nginx démarré."
 }
@@ -187,7 +187,7 @@ obtain_ssl_certificate() {
     info "Obtention du certificat pour ${MATRIX_DOMAIN}..."
     info "⚠  Le port 80 doit être ouvert et accessible depuis Internet."
 
-    docker compose run --rm certbot certonly \
+    sudo docker-compose run --rm certbot certonly \
         --webroot \
         --webroot-path=/var/www/certbot \
         --email "${LETSENCRYPT_EMAIL}" \
@@ -209,19 +209,19 @@ setup_nginx_https() {
 # ── 9. Démarrage de tous les services ────────────────────────────────────────
 start_all_services() {
     step "Démarrage de tous les services"
-    docker compose up -d
+    sudo docker-compose up -d
 
     info "Attente du démarrage de Synapse (60 secondes max)..."
     local retries=12
     while [ $retries -gt 0 ]; do
-        if docker compose exec -T synapse curl -fSs http://localhost:8008/health >/dev/null 2>&1; then
+        if sudo docker-compose exec -T synapse curl -fSs http://localhost:8008/health >/dev/null 2>&1; then
             break
         fi
         sleep 5
         retries=$(( retries - 1 ))
     done
 
-    docker compose exec nginx nginx -s reload
+    sudo docker-compose exec nginx nginx -s reload
     success "Tous les services sont opérationnels."
 }
 
@@ -232,7 +232,7 @@ create_admin_user() {
     read -r -p "  Créer un compte administrateur maintenant ? [o/N] " answer
     if [[ "${answer,,}" == "o" ]]; then
         read -r -p "  Nom d'utilisateur : " admin_user
-        docker compose exec synapse \
+        sudo docker-compose exec synapse \
             register_new_matrix_user \
             -c /data/homeserver.yaml \
             -a \
