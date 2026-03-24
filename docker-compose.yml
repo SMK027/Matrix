@@ -4,8 +4,8 @@
 # Services :
 #   synapse  — Homeserver Matrix (matrixdotorg/synapse)
 #   postgres — Base de données PostgreSQL 16
-#   nginx    — Reverse proxy + terminaison TLS
-#   certbot  — Gestion des certificats Let's Encrypt
+#   nginx    — Reverse proxy local (profil `local` uniquement)
+#   certbot  — Gestion SSL locale (profil `local` uniquement)
 # ==============================================================================
 
 services:
@@ -24,6 +24,15 @@ services:
         condition: service_healthy
     networks:
       - matrix-net
+      - proxy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=proxy"
+      - "traefik.http.routers.matrix.rule=Host(`matrix.leofranz.fr`)"
+      - "traefik.http.routers.matrix.entrypoints=websecure"
+      - "traefik.http.routers.matrix.tls=true"
+      - "traefik.http.routers.matrix.tls.certresolver=le"
+      - "traefik.http.services.matrix.loadbalancer.server.port=8008"
     healthcheck:
       test: ["CMD-SHELL", "curl -fSs http://localhost:8008/health || exit 1"]
       interval: 30s
@@ -56,6 +65,7 @@ services:
   nginx:
     image: nginx:alpine
     container_name: matrix-nginx
+    profiles: ["local"]
     restart: unless-stopped
     ports:
       - "${HTTP_PORT:-80}:80"     # Port HTTP (8090 en local, 80 en production)
@@ -74,6 +84,7 @@ services:
   certbot:
     image: certbot/certbot
     container_name: matrix-certbot
+    profiles: ["local"]
     volumes:
       - ./data/certbot/conf:/etc/letsencrypt
       - ./data/certbot/www:/var/www/certbot
@@ -81,3 +92,6 @@ services:
 networks:
   matrix-net:
     driver: bridge
+  proxy:
+    external: true
+    name: proxy
