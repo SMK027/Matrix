@@ -1,0 +1,45 @@
+# ==============================================================================
+# nginx/matrix-local.conf.template
+# Configuration locale HTTP (sans SSL) pour développement/tests.
+#
+# MATRIX_DOMAIN_PLACEHOLDER est remplacé par setup.sh
+# ==============================================================================
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name MATRIX_DOMAIN_PLACEHOLDER;
+
+    client_max_body_size 50M;
+
+    # Découverte Matrix pour clients
+    location /.well-known/matrix/server {
+        return 200 '{"m.server":"MATRIX_DOMAIN_PLACEHOLDER"}';
+        default_type application/json;
+        add_header Access-Control-Allow-Origin * always;
+    }
+
+    location /.well-known/matrix/client {
+        return 200 '{"m.homeserver":{"base_url":"http://MATRIX_DOMAIN_PLACEHOLDER"}}';
+        default_type application/json;
+        add_header Access-Control-Allow-Origin * always;
+    }
+
+    # API Matrix et Synapse
+    location ~* ^(\/_matrix|\/_synapse\/client) {
+        proxy_pass         http://synapse:8008;
+        proxy_set_header   X-Forwarded-For   $remote_addr;
+        proxy_set_header   X-Forwarded-Proto $scheme;
+        proxy_set_header   Host              $host;
+        proxy_http_version 1.1;
+        proxy_set_header   Upgrade           $http_upgrade;
+        proxy_set_header   Connection        "upgrade";
+        proxy_read_timeout 600s;
+        proxy_send_timeout 600s;
+    }
+
+    location / {
+        return 404 '{"errcode":"M_NOT_FOUND","error":"Utilisez une route Matrix: /_matrix/..."}';
+        default_type application/json;
+    }
+}

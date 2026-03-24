@@ -337,7 +337,10 @@ obtain_ssl_certificate() {
 # ── 8. Config nginx HTTPS ─────────────────────────────────────────────────────
 setup_nginx_https() {
     if [ "${LOCAL_MODE}" = "true" ]; then
-        warn "Mode local — config HTTPS ignorée, le serveur reste en HTTP."
+        step "Configuration nginx — mode local (HTTP)"
+        sed "s|MATRIX_DOMAIN_PLACEHOLDER|${MATRIX_DOMAIN}|g" \
+            nginx/matrix-local.conf.template > nginx/conf.d/matrix.conf
+        success "nginx/conf.d/matrix.conf (HTTP local) généré."
         return
     fi
     step "Configuration nginx — mode production (HTTPS)"
