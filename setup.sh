@@ -215,15 +215,11 @@ generate_synapse_config() {
     info "Application de la configuration PostgreSQL et des options de sécurité..."
     # On utilise Python + PyYAML (disponibles dans l'image Synapse) pour modifier
     # homeserver.yaml sans casser le format YAML.
-    # Les secrets sont passés via des variables d'environnement Docker (pas dans le script).
-    docker run --rm \
-        -v "$(pwd)/data/synapse:/data" \
-        -e "POSTGRES_USER=${POSTGRES_USER}" \
-        -e "POSTGRES_PASSWORD=${POSTGRES_PASSWORD}" \
-        -e "POSTGRES_DB=${POSTGRES_DB}" \
-        -e "MATRIX_DOMAIN=${MATRIX_DOMAIN}" \
-        -e "ALLOW_REGISTRATION=${SYNAPSE_ALLOW_REGISTRATION}" \
-        matrixdotorg/synapse:latest python3 - <<'PYEOF'
+    # Le script Python est écrit dans un fichier temporaire puis monté dans le
+    # conteneur — évite le problème du heredoc avec docker run (stdin non transmis).
+    local py_script
+    py_script=$(mktemp /tmp/synapse_configure_XXXXXX.py)
+    cat > "${py_script}" << 'PYEOF'
 import yaml
 import os
 
@@ -262,6 +258,18 @@ with open(cfg_path, 'w') as f:
 
 print('homeserver.yaml mis à jour : PostgreSQL, URL publique, options de sécurité.')
 PYEOF
+
+    docker run --rm \
+        -v "$(pwd)/data/synapse:/data" \
+        -v "${py_script}:/tmp/configure.py:ro" \
+        -e "POSTGRES_USER=${POSTGRES_USER}" \
+        -e "POSTGRES_PASSWORD=${POSTGRES_PASSWORD}" \
+        -e "POSTGRES_DB=${POSTGRES_DB}" \
+        -e "MATRIX_DOMAIN=${MATRIX_DOMAIN}" \
+        -e "ALLOW_REGISTRATION=${SYNAPSE_ALLOW_REGISTRATION}" \
+        matrixdotorg/synapse:latest python3 /tmp/configure.py
+
+    rm -f "${py_script}"
 
     success "homeserver.yaml prêt dans data/synapse/"
 }
