@@ -60,9 +60,9 @@ services:
     container_name: matrix-nginx
     restart: unless-stopped
     ports:
-      - "80:80"
-      - "443:443"
-      - "8448:8448"   # Port de fédération Matrix
+      - "${HTTP_PORT:-80}:80"     # Port HTTP (8090 en local, 80 en production)
+      - "${HTTPS_PORT:-443}:443"  # Port HTTPS (ignoré en mode local)
+      - "${FED_PORT:-8448}:8448" # Port de fédération Matrix
     volumes:
       - ./nginx/conf.d:/etc/nginx/conf.d:ro
       - ./data/certbot/conf:/etc/letsencrypt:ro

@@ -170,10 +170,24 @@ load_env() {
     export POSTGRES_USER="${POSTGRES_USER:-synapse}"
     export POSTGRES_DB="${POSTGRES_DB:-synapse}"
     export SYNAPSE_ALLOW_REGISTRATION="${SYNAPSE_ALLOW_REGISTRATION:-false}"
+    export HTTP_PORT="${HTTP_PORT:-80}"
+    export HTTPS_PORT="${HTTPS_PORT:-443}"
+    export FED_PORT="${FED_PORT:-8448}"
+
+    # Détection mode local (domaine = localhost ou 127.x.x.x)
+    LOCAL_MODE=false
+    if [[ "${MATRIX_DOMAIN}" == "localhost" || "${MATRIX_DOMAIN}" =~ ^127\. ]]; then
+        LOCAL_MODE=true
+        warn "Mode LOCAL détecté (${MATRIX_DOMAIN}) — SSL et certbot désactivés."
+    fi
+    export LOCAL_MODE
 
     success "Domaine Matrix      : ${MATRIX_DOMAIN}"
     success "Nom du serveur      : ${MATRIX_SERVER_NAME}"
-    success "Email Let's Encrypt : ${LETSENCRYPT_EMAIL}"
+    if [ "${LOCAL_MODE}" = "false" ]; then
+        success "Email Let's Encrypt : ${LETSENCRYPT_EMAIL}"
+    fi
+    success "Port HTTP           : ${HTTP_PORT}"
 }
 
 # ── 3. Répertoires ───────────────────────────────────────────────────────────
@@ -242,8 +256,13 @@ config['database'] = {
 }
 
 # URL publique (utilisée par les clients pour se connecter)
-config['public_baseurl'] = 'https://' + os.environ['MATRIX_DOMAIN'] + '/'
-
+local_mode = os.environ.get('LOCAL_MODE', 'false').lower() == 'true'
+http_port  = os.environ.get('HTTP_PORT', '80')
+if local_mode:
+    port_suffix = '' if http_port == '80' else ':' + http_port
+    config['public_baseurl'] = 'http://' + os.environ['MATRIX_DOMAIN'] + port_suffix + '/'
+else:
+    config['public_baseurl'] = 'https://' + os.environ['MATRIX_DOMAIN'] + '/'
 # Inscription publique
 config['enable_registration'] = (
     os.environ.get('ALLOW_REGISTRATION', 'false').lower() == 'true'
@@ -270,6 +289,8 @@ PYEOF
         -e "POSTGRES_DB=${POSTGRES_DB}" \
         -e "MATRIX_DOMAIN=${MATRIX_DOMAIN}" \
         -e "ALLOW_REGISTRATION=${SYNAPSE_ALLOW_REGISTRATION}" \
+        -e "LOCAL_MODE=${LOCAL_MODE}" \
+        -e "HTTP_PORT=${HTTP_PORT}" \
         matrixdotorg/synapse:latest /tmp/configure.py
 
     rm -f "${py_script}"
@@ -280,16 +301,20 @@ PYEOF
 # ── 6. Démarrage nginx (HTTP) ─────────────────────────────────────────────────
 start_nginx() {
     step "Démarrage de nginx (HTTP)"
-    # Seul nginx démarre ici (pas de depends_on sur synapse), ce qui suffit
-    # pour le challenge ACME webroot.
-    sudo docker-compose up -d nginx
+    # Seul nginx démarre ici pour le challenge ACME (inutile en mode local).
+    docker compose up -d nginx
     sleep 3
-    success "Nginx démarré."
+    success "Nginx démarré sur le port ${HTTP_PORT}."
 }
 
 # ── 7. Certificat SSL Let's Encrypt ──────────────────────────────────────────
 obtain_ssl_certificate() {
     step "Certificat SSL Let's Encrypt"
+
+    if [ "${LOCAL_MODE}" = "true" ]; then
+        warn "Mode local — étape SSL ignorée."
+        return
+    fi
 
     if [ -f "data/certbot/conf/live/${MATRIX_DOMAIN}/fullchain.pem" ]; then
         warn "Certificat déjà présent pour ${MATRIX_DOMAIN} — étape ignorée."
@@ -299,7 +324,7 @@ obtain_ssl_certificate() {
     info "Obtention du certificat pour ${MATRIX_DOMAIN}..."
     info "⚠  Le port 80 doit être ouvert et accessible depuis Internet."
 
-    sudo docker-compose run --rm certbot certonly \
+    docker compose run --rm certbot certonly \
         --webroot \
         --webroot-path=/var/www/certbot \
         --email "${LETSENCRYPT_EMAIL}" \
@@ -312,6 +337,10 @@ obtain_ssl_certificate() {
 
 # ── 8. Config nginx HTTPS ─────────────────────────────────────────────────────
 setup_nginx_https() {
+    if [ "${LOCAL_MODE}" = "true" ]; then
+        warn "Mode local — config HTTPS ignorée, le serveur reste en HTTP."
+        return
+    fi
     step "Configuration nginx — mode production (HTTPS)"
     sed "s|MATRIX_DOMAIN_PLACEHOLDER|${MATRIX_DOMAIN}|g" \
         nginx/matrix.conf.template > nginx/conf.d/matrix.conf
@@ -321,19 +350,19 @@ setup_nginx_https() {
 # ── 9. Démarrage de tous les services ────────────────────────────────────────
 start_all_services() {
     step "Démarrage de tous les services"
-    sudo docker-compose up -d
+    docker compose up -d
 
     info "Attente du démarrage de Synapse (60 secondes max)..."
     local retries=12
     while [ $retries -gt 0 ]; do
-        if sudo docker-compose exec -T synapse curl -fSs http://localhost:8008/health >/dev/null 2>&1; then
+        if docker compose exec -T synapse curl -fSs http://localhost:8008/health >/dev/null 2>&1; then
             break
         fi
         sleep 5
         retries=$(( retries - 1 ))
     done
 
-    sudo docker-compose exec nginx nginx -s reload
+    docker compose exec nginx nginx -s reload
     success "Tous les services sont opérationnels."
 }
 
@@ -344,7 +373,7 @@ create_admin_user() {
     read -r -p "  Créer un compte administrateur maintenant ? [o/N] " answer
     if [[ "${answer,,}" == "o" ]]; then
         read -r -p "  Nom d'utilisateur : " admin_user
-        sudo docker-compose exec synapse \
+        docker compose exec synapse \
             register_new_matrix_user \
             -c /data/homeserver.yaml \
             -a \
@@ -381,9 +410,17 @@ main() {
     echo -e "║   Serveur Matrix opérationnel !                              ║"
     echo -e "╚══════════════════════════════════════════════════════════════╝${NC}"
     echo ""
-    echo -e "  Serveur HTTPS  : ${BOLD}https://${MATRIX_DOMAIN}${NC}"
-    echo -e "  IDs Matrix     : ${BOLD}@utilisateur:${MATRIX_SERVER_NAME}${NC}"
-    echo -e "  Admin API      : https://${MATRIX_DOMAIN}/_synapse/admin/v1"
+    if [ "${LOCAL_MODE}" = "true" ]; then
+        local port_suffix=""
+        [ "${HTTP_PORT}" != "80" ] && port_suffix=":${HTTP_PORT}"
+        echo -e "  Serveur HTTP   : ${BOLD}http://${MATRIX_DOMAIN}${port_suffix}${NC}"
+        echo -e "  IDs Matrix     : ${BOLD}@utilisateur:${MATRIX_SERVER_NAME}${NC}"
+        echo -e "  API Synapse    : http://${MATRIX_DOMAIN}${port_suffix}/_matrix/client/versions"
+    else
+        echo -e "  Serveur HTTPS  : ${BOLD}https://${MATRIX_DOMAIN}${NC}"
+        echo -e "  IDs Matrix     : ${BOLD}@utilisateur:${MATRIX_SERVER_NAME}${NC}"
+        echo -e "  Admin API      : https://${MATRIX_DOMAIN}/_synapse/admin/v1"
+    fi
     echo ""
     echo -e "  Clients compatibles :"
     echo -e "    • Element Web  → https://app.element.io"
