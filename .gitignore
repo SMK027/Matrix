@@ -1,0 +1,16 @@
+# Secrets — ne jamais committer
+.env
+
+# Données persistantes (BDD, médias, clés de signature, certificats)
+data/
+
+# Configurations nginx générées par setup.sh
+nginx/conf.d/
+
+# Sauvegardes
+backups/
+
+# Fichiers temporaires
+*.log
+*.tmp
+*.bak

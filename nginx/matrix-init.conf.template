@@ -1,0 +1,23 @@
+# ==============================================================================
+# nginx/matrix-init.conf.template
+# Configuration temporaire (HTTP uniquement) utilisée pendant la phase
+# d'obtention du certificat SSL Let's Encrypt via certbot --webroot.
+#
+# MATRIX_DOMAIN_PLACEHOLDER est remplacé par setup.sh
+# ==============================================================================
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name MATRIX_DOMAIN_PLACEHOLDER;
+
+    # Challenge ACME pour certbot
+    location /.well-known/acme-challenge/ {
+        root /var/www/certbot;
+    }
+
+    location / {
+        return 200 'Serveur Matrix en cours de configuration — veuillez patienter.';
+        add_header Content-Type text/plain;
+    }
+}
