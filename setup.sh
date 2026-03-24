@@ -215,16 +215,15 @@ generate_synapse_config() {
     step "Génération de la configuration Synapse"
 
     if [ -f "data/synapse/homeserver.yaml" ]; then
-        warn "data/synapse/homeserver.yaml existe déjà — étape ignorée."
-        return
+        warn "data/synapse/homeserver.yaml existe déjà — mise à jour appliquée."
+    else
+        info "Génération du homeserver.yaml initial (Synapse generate)..."
+        docker run --rm \
+            -v "$(pwd)/data/synapse:/data" \
+            -e "SYNAPSE_SERVER_NAME=${MATRIX_SERVER_NAME}" \
+            -e "SYNAPSE_REPORT_STATS=no" \
+            matrixdotorg/synapse:latest generate
     fi
-
-    info "Génération du homeserver.yaml initial (Synapse generate)..."
-    docker run --rm \
-        -v "$(pwd)/data/synapse:/data" \
-        -e "SYNAPSE_SERVER_NAME=${MATRIX_SERVER_NAME}" \
-        -e "SYNAPSE_REPORT_STATS=no" \
-        matrixdotorg/synapse:latest generate
 
     info "Application de la configuration PostgreSQL et des options de sécurité..."
     # On utilise Python + PyYAML (disponibles dans l'image Synapse) pour modifier
