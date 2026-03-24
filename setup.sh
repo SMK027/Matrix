@@ -5,6 +5,7 @@
 # Usage : bash setup.sh
 #
 # Ce script effectue dans l'ordre :
+#   0. Installation automatique de Docker et Docker Compose si absents
 #   1. Vérification des prérequis (Docker, Docker Compose)
 #   2. Chargement et validation du fichier .env
 #   3. Création des répertoires de données
@@ -28,18 +29,118 @@ warn()    { echo -e "${YELLOW}[WARN]${NC}   $*"; }
 error()   { echo -e "${RED}[ERREUR]${NC} $*"; exit 1; }
 step()    { echo -e "\n${BOLD}━━━  $*  ━━━${NC}"; }
 
-# ── 1. Prérequis ─────────────────────────────────────────────────────────────
-check_prerequisites() {
-    step "Vérification des prérequis"
+# ── 0. Installation des dépendances ──────────────────────────────────────────
+install_dependencies() {
+    step "Installation des dépendances (Docker + Compose)"
+
+    # Ce script nécessite les droits root pour installer des paquets
+    if [ "$(id -u)" -ne 0 ]; then
+        error "Ce script doit être exécuté en root ou avec sudo."
+    fi
+
+    # Détection de la distribution
+    local distro="unknown"
+    if [ -f /etc/os-release ]; then
+        # shellcheck disable=SC1091
+        distro=$(. /etc/os-release && echo "${ID:-unknown}")
+    fi
+
+    case "$distro" in
+        debian|ubuntu|linuxmint|pop|raspbian)
+            _install_docker_apt
+            ;;
+        centos|rhel|fedora|rocky|almalinux)
+            _install_docker_dnf
+            ;;
+        *)
+            warn "Distribution '${distro}' non reconnue — vérification manuelle..."
+            ;;
+    esac
+
+    # Vérification finale après tentative d'installation
     command -v docker >/dev/null 2>&1 \
-        || error "Docker n'est pas installé. Voir : https://docs.docker.com/engine/install/"
+        || error "Docker introuvable après installation. Installez-le manuellement : https://docs.docker.com/engine/install/"
     docker compose version >/dev/null 2>&1 \
-        || error "Docker Compose V2 n'est pas disponible (plugin 'compose' manquant)."
-    docker info >/dev/null 2>&1 \
-        || error "Le démon Docker n'est pas en cours d'exécution."
+        || error "Docker Compose V2 introuvable après installation. Installez le plugin : https://docs.docker.com/compose/install/"
+
+    # S'assurer que le démon Docker tourne
+    if ! docker info >/dev/null 2>&1; then
+        info "Démarrage du service Docker..."
+        systemctl enable --now docker
+    fi
 
     success "Docker       : $(docker --version | awk '{print $3}' | tr -d ',')"
     success "Compose      : $(docker compose version --short)"
+}
+
+_install_docker_apt() {
+    # ── Debian / Ubuntu ──────────────────────────────────────────────────────
+    if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
+        success "Docker et Compose déjà installés — aucune action nécessaire."
+        return
+    fi
+
+    info "Mise à jour des dépôts APT..."
+    apt-get update -qq
+
+    info "Installation des paquets requis..."
+    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+        ca-certificates curl gnupg lsb-release
+
+    # Clé GPG officielle Docker
+    install -m 0755 -d /etc/apt/keyrings
+    if [ ! -f /etc/apt/keyrings/docker.gpg ]; then
+        info "Ajout de la clé GPG Docker..."
+        curl -fsSL https://download.docker.com/linux/$(. /etc/os-release && echo "$ID")/gpg \
+            | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+        chmod a+r /etc/apt/keyrings/docker.gpg
+    fi
+
+    # Dépôt officiel Docker
+    if [ ! -f /etc/apt/sources.list.d/docker.list ]; then
+        info "Ajout du dépôt Docker..."
+        echo \
+            "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] \
+https://download.docker.com/linux/$(. /etc/os-release && echo "$ID") \
+$(. /etc/os-release && echo "$VERSION_CODENAME") stable" \
+            > /etc/apt/sources.list.d/docker.list
+        apt-get update -qq
+    fi
+
+    info "Installation de Docker Engine + Compose plugin..."
+    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+        docker-ce docker-ce-cli containerd.io \
+        docker-buildx-plugin docker-compose-plugin
+
+    success "Docker installé via le dépôt officiel."
+}
+
+_install_docker_dnf() {
+    # ── RHEL / CentOS / Fedora ───────────────────────────────────────────────
+    if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
+        success "Docker et Compose déjà installés — aucune action nécessaire."
+        return
+    fi
+
+    local pkg_manager="dnf"
+    command -v dnf >/dev/null 2>&1 || pkg_manager="yum"
+
+    info "Ajout du dépôt Docker CE pour RHEL/Fedora..."
+    $pkg_manager install -y -q yum-utils
+    yum-config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
+
+    info "Installation de Docker Engine + Compose plugin..."
+    $pkg_manager install -y -q \
+        docker-ce docker-ce-cli containerd.io \
+        docker-buildx-plugin docker-compose-plugin
+
+    success "Docker installé via le dépôt officiel."
+}
+
+# ── 1. Prérequis ─────────────────────────────────────────────────────────────
+# (Les vérifications finales sont déjà effectuées par install_dependencies)
+check_prerequisites() {
+    : # no-op — couvert par install_dependencies
 }
 
 # ── 2. Chargement du .env ────────────────────────────────────────────────────
@@ -253,7 +354,7 @@ main() {
     echo -e "╚══════════════════════════════════════════════════╝${NC}"
     echo ""
 
-    check_prerequisites
+    install_dependencies
     load_env
     create_directories
     setup_nginx_init
