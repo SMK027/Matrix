@@ -29,6 +29,34 @@ warn()    { echo -e "${YELLOW}[WARN]${NC}   $*"; }
 error()   { echo -e "${RED}[ERREUR]${NC} $*"; exit 1; }
 step()    { echo -e "\n${BOLD}━━━  $*  ━━━${NC}"; }
 
+COMPOSE_CMD=""
+
+resolve_compose_command() {
+    if docker compose version >/dev/null 2>&1; then
+        COMPOSE_CMD="docker compose"
+        return 0
+    fi
+
+    if command -v docker-compose >/dev/null 2>&1; then
+        COMPOSE_CMD="docker-compose"
+        return 0
+    fi
+
+    return 1
+}
+
+compose() {
+    if [ -z "${COMPOSE_CMD}" ]; then
+        resolve_compose_command || error "Aucune commande Compose disponible (docker compose ou docker-compose)."
+    fi
+
+    if [ "${COMPOSE_CMD}" = "docker compose" ]; then
+        docker compose "$@"
+    else
+        docker-compose "$@"
+    fi
+}
+
 # ── 0. Installation des dépendances ──────────────────────────────────────────
 install_dependencies() {
     step "Installation des dépendances (Docker + Compose)"
@@ -36,6 +64,14 @@ install_dependencies() {
     # Ce script nécessite les droits root pour installer des paquets
     if [ "$(id -u)" -ne 0 ]; then
         error "Ce script doit être exécuté en root ou avec sudo."
+    fi
+
+    if command -v docker >/dev/null 2>&1; then
+        if resolve_compose_command; then
+            success "Docker et Compose déjà installés — aucune action nécessaire."
+        else
+            error "Docker est déjà installé mais aucune commande Compose n'a été trouvée. Par sécurité, le script n'altère pas une installation Docker existante sur un VPS en production. Installez docker-compose ou le plugin Docker Compose, puis relancez le script."
+        fi
     fi
 
     # Détection de la distribution
@@ -60,8 +96,8 @@ install_dependencies() {
     # Vérification finale après tentative d'installation
     command -v docker >/dev/null 2>&1 \
         || error "Docker introuvable après installation. Installez-le manuellement : https://docs.docker.com/engine/install/"
-    docker compose version >/dev/null 2>&1 \
-        || error "Docker Compose V2 introuvable après installation. Installez le plugin : https://docs.docker.com/compose/install/"
+    resolve_compose_command \
+        || error "Aucune commande Compose disponible après installation. Installez docker-compose ou le plugin Docker Compose."
 
     # S'assurer que le démon Docker tourne
     if ! docker info >/dev/null 2>&1; then
@@ -70,16 +106,15 @@ install_dependencies() {
     fi
 
     success "Docker       : $(docker --version | awk '{print $3}' | tr -d ',')"
-    success "Compose      : $(docker compose version --short)"
+    if [ "${COMPOSE_CMD}" = "docker compose" ]; then
+        success "Compose      : $(docker compose version --short)"
+    else
+        success "Compose      : $(docker-compose version --short 2>/dev/null || docker-compose version | head -n1)"
+    fi
 }
 
 _install_docker_apt() {
     # ── Debian / Ubuntu ──────────────────────────────────────────────────────
-    if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
-        success "Docker et Compose déjà installés — aucune action nécessaire."
-        return
-    fi
-
     info "Mise à jour des dépôts APT..."
     apt-get update -qq
 
@@ -117,11 +152,6 @@ $(. /etc/os-release && echo "$VERSION_CODENAME") stable" \
 
 _install_docker_dnf() {
     # ── RHEL / CentOS / Fedora ───────────────────────────────────────────────
-    if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
-        success "Docker et Compose déjà installés — aucune action nécessaire."
-        return
-    fi
-
     local pkg_manager="dnf"
     command -v dnf >/dev/null 2>&1 || pkg_manager="yum"
 
@@ -144,6 +174,39 @@ check_prerequisites() {
 }
 
 # ── 2. Chargement du .env ────────────────────────────────────────────────────
+load_dotenv_file() {
+    local env_file="$1"
+    local line key value
+
+    while IFS= read -r line || [ -n "$line" ]; do
+        line="${line%$'\r'}"
+
+        if [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]]; then
+            continue
+        fi
+
+        if [[ "$line" != *=* ]]; then
+            error "Entrée invalide dans ${env_file} : ${line}"
+        fi
+
+        key="${line%%=*}"
+        value="${line#*=}"
+
+        key="${key#"${key%%[![:space:]]*}"}"
+        key="${key%"${key##*[![:space:]]}"}"
+
+        if [[ ! "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+            error "Nom de variable invalide dans ${env_file} : ${key}"
+        fi
+
+        if [[ "$value" =~ ^".*"$ || "$value" =~ ^'.*'$ ]]; then
+            value="${value:1:${#value}-2}"
+        fi
+
+        export "$key=$value"
+    done < "$env_file"
+}
+
 load_env() {
     step "Chargement de la configuration"
 
@@ -153,8 +216,7 @@ load_env() {
         error "Veuillez remplir le fichier .env, puis relancez : bash setup.sh"
     fi
 
-    # shellcheck disable=SC1091
-    source .env
+    load_dotenv_file .env
 
     local missing=()
     [[ -z "${MATRIX_DOMAIN:-}"      ]] && missing+=("MATRIX_DOMAIN")
@@ -301,7 +363,7 @@ PYEOF
 start_nginx() {
     step "Démarrage de nginx (HTTP)"
     # Seul nginx démarre ici pour le challenge ACME (inutile en mode local).
-    docker compose up -d nginx
+    compose up -d nginx
     sleep 3
     success "Nginx démarré sur le port ${HTTP_PORT}."
 }
@@ -323,7 +385,7 @@ obtain_ssl_certificate() {
     info "Obtention du certificat pour ${MATRIX_DOMAIN}..."
     info "⚠  Le port 80 doit être ouvert et accessible depuis Internet."
 
-    docker compose run --rm certbot certonly \
+    compose run --rm certbot certonly \
         --webroot \
         --webroot-path=/var/www/certbot \
         --email "${LETSENCRYPT_EMAIL}" \
@@ -352,19 +414,19 @@ setup_nginx_https() {
 # ── 9. Démarrage de tous les services ────────────────────────────────────────
 start_all_services() {
     step "Démarrage de tous les services"
-    docker compose up -d
+    compose up -d
 
     info "Attente du démarrage de Synapse (60 secondes max)..."
     local retries=12
     while [ $retries -gt 0 ]; do
-        if docker compose exec -T synapse curl -fSs http://localhost:8008/health >/dev/null 2>&1; then
+        if compose exec -T synapse curl -fSs http://localhost:8008/health >/dev/null 2>&1; then
             break
         fi
         sleep 5
         retries=$(( retries - 1 ))
     done
 
-    docker compose exec nginx nginx -s reload
+    compose exec nginx nginx -s reload
     success "Tous les services sont opérationnels."
 }
 
@@ -375,7 +437,7 @@ create_admin_user() {
     read -r -p "  Créer un compte administrateur maintenant ? [o/N] " answer
     if [[ "${answer,,}" == "o" ]]; then
         read -r -p "  Nom d'utilisateur : " admin_user
-        docker compose exec synapse \
+        compose exec synapse \
             register_new_matrix_user \
             -c /data/homeserver.yaml \
             -a \
