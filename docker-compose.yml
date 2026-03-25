@@ -28,7 +28,8 @@ services:
     labels:
       - "traefik.enable=true"
       - "traefik.docker.network=proxy"
-      - "traefik.http.routers.matrix.rule=Host(`matrix.leofranz.fr`)"
+      # ── Routeur client (port 443) ──
+      - "traefik.http.routers.matrix.rule=Host(`${MATRIX_DOMAIN}`)"
       - "traefik.http.routers.matrix.entrypoints=websecure"
       - "traefik.http.routers.matrix.tls=true"
       - "traefik.http.routers.matrix.tls.certresolver=le"
@@ -39,6 +40,8 @@ services:
       timeout: 10s
       retries: 3
       start_period: 60s
+    expose:
+      - "8008"
 
   # ── PostgreSQL ───────────────────────────────────────────────────────────────
   postgres:

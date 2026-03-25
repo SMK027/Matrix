@@ -222,7 +222,17 @@ load_env() {
     [[ -z "${MATRIX_DOMAIN:-}"      ]] && missing+=("MATRIX_DOMAIN")
     [[ -z "${MATRIX_SERVER_NAME:-}" ]] && missing+=("MATRIX_SERVER_NAME")
     [[ -z "${POSTGRES_PASSWORD:-}"  ]] && missing+=("POSTGRES_PASSWORD")
-    [[ -z "${LETSENCRYPT_EMAIL:-}"  ]] && missing+=("LETSENCRYPT_EMAIL")
+
+    # Détection du mode reverse proxy externe (ex: REVERSE_PROXY=traefik)
+    export REVERSE_PROXY="${REVERSE_PROXY:-}"
+    TRAEFIK_MODE=false
+    if [[ "${REVERSE_PROXY,,}" == "traefik" ]]; then
+        TRAEFIK_MODE=true
+        info "Mode TRAEFIK détecté — nginx et certbot désactivés, SSL géré par Traefik."
+    else
+        [[ -z "${LETSENCRYPT_EMAIL:-}" ]] && missing+=("LETSENCRYPT_EMAIL")
+    fi
+    export TRAEFIK_MODE
 
     if [ ${#missing[@]} -gt 0 ]; then
         error "Variables manquantes dans .env : ${missing[*]}"
@@ -246,7 +256,9 @@ load_env() {
 
     success "Domaine Matrix      : ${MATRIX_DOMAIN}"
     success "Nom du serveur      : ${MATRIX_SERVER_NAME}"
-    if [ "${LOCAL_MODE}" = "false" ]; then
+    if [[ "${TRAEFIK_MODE}" == "true" ]]; then
+        success "Reverse proxy       : Traefik (SSL automatique)"
+    elif [ "${LOCAL_MODE}" = "false" ]; then
         success "Email Let's Encrypt : ${LETSENCRYPT_EMAIL}"
     fi
     success "Port HTTP           : ${HTTP_PORT}"
@@ -266,6 +278,10 @@ create_directories() {
 
 # ── 4. Config nginx HTTP (pour certbot) ──────────────────────────────────────
 setup_nginx_init() {
+    if [[ "${TRAEFIK_MODE}" == "true" ]]; then
+        info "Mode Traefik — configuration nginx non nécessaire."
+        return
+    fi
     step "Configuration nginx — mode initialisation (HTTP)"
     sed "s|MATRIX_DOMAIN_PLACEHOLDER|${MATRIX_DOMAIN}|g" \
         nginx/matrix-init.conf.template > nginx/conf.d/matrix.conf
@@ -318,12 +334,18 @@ config['database'] = {
 
 # URL publique (utilisée par les clients pour se connecter)
 local_mode = os.environ.get('LOCAL_MODE', 'false').lower() == 'true'
+traefik_mode = os.environ.get('TRAEFIK_MODE', 'false').lower() == 'true'
 http_port  = os.environ.get('HTTP_PORT', '80')
 if local_mode:
     port_suffix = '' if http_port == '80' else ':' + http_port
     config['public_baseurl'] = 'http://' + os.environ['MATRIX_DOMAIN'] + port_suffix + '/'
 else:
     config['public_baseurl'] = 'https://' + os.environ['MATRIX_DOMAIN'] + '/'
+
+# Avec Traefik ou en production, Synapse sert lui-même les endpoints .well-known
+if traefik_mode or not local_mode:
+    config['serve_server_wellknown'] = True
+
 # Inscription publique
 config['enable_registration'] = (
     os.environ.get('ALLOW_REGISTRATION', 'false').lower() == 'true'
@@ -352,6 +374,7 @@ PYEOF
         -e "ALLOW_REGISTRATION=${SYNAPSE_ALLOW_REGISTRATION}" \
         -e "LOCAL_MODE=${LOCAL_MODE}" \
         -e "HTTP_PORT=${HTTP_PORT}" \
+        -e "TRAEFIK_MODE=${TRAEFIK_MODE}" \
         matrixdotorg/synapse:latest /tmp/configure.py
 
     rm -f "${py_script}"
@@ -361,6 +384,10 @@ PYEOF
 
 # ── 6. Démarrage nginx (HTTP) ─────────────────────────────────────────────────
 start_nginx() {
+    if [[ "${TRAEFIK_MODE}" == "true" ]]; then
+        info "Mode Traefik — démarrage nginx non nécessaire."
+        return
+    fi
     step "Démarrage de nginx (HTTP)"
     # Seul nginx démarre ici pour le challenge ACME (inutile en mode local).
     compose up -d nginx
@@ -370,6 +397,11 @@ start_nginx() {
 
 # ── 7. Certificat SSL Let's Encrypt ──────────────────────────────────────────
 obtain_ssl_certificate() {
+    if [[ "${TRAEFIK_MODE}" == "true" ]]; then
+        info "Mode Traefik — certificat SSL géré automatiquement par Traefik."
+        return
+    fi
+
     step "Certificat SSL Let's Encrypt"
 
     if [ "${LOCAL_MODE}" = "true" ]; then
@@ -398,6 +430,10 @@ obtain_ssl_certificate() {
 
 # ── 8. Config nginx HTTPS ─────────────────────────────────────────────────────
 setup_nginx_https() {
+    if [[ "${TRAEFIK_MODE}" == "true" ]]; then
+        info "Mode Traefik — configuration nginx HTTPS non nécessaire."
+        return
+    fi
     if [ "${LOCAL_MODE}" = "true" ]; then
         step "Configuration nginx — mode local (HTTP)"
         sed "s|MATRIX_DOMAIN_PLACEHOLDER|${MATRIX_DOMAIN}|g" \
@@ -426,7 +462,9 @@ start_all_services() {
         retries=$(( retries - 1 ))
     done
 
-    compose exec nginx nginx -s reload
+    if [[ "${TRAEFIK_MODE}" != "true" ]]; then
+        compose exec nginx nginx -s reload
+    fi
     success "Tous les services sont opérationnels."
 }
 
@@ -484,6 +522,9 @@ main() {
         echo -e "  Serveur HTTPS  : ${BOLD}https://${MATRIX_DOMAIN}${NC}"
         echo -e "  IDs Matrix     : ${BOLD}@utilisateur:${MATRIX_SERVER_NAME}${NC}"
         echo -e "  Admin API      : https://${MATRIX_DOMAIN}/_synapse/admin/v1"
+        if [[ "${TRAEFIK_MODE}" == "true" ]]; then
+            echo -e "  SSL            : ${BOLD}Géré par Traefik${NC}"
+        fi
     fi
     echo ""
     echo -e "  Clients compatibles :"
@@ -495,7 +536,9 @@ main() {
     echo -e "    make status       — État des conteneurs"
     echo -e "    make admin        — Créer un administrateur"
     echo -e "    make backup       — Sauvegarder BDD + données Synapse"
-    echo -e "    make renew-certs  — Renouveler le certificat SSL"
+    if [[ "${TRAEFIK_MODE}" != "true" ]]; then
+        echo -e "    make renew-certs  — Renouveler le certificat SSL"
+    fi
     echo ""
 }
 

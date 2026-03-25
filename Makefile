@@ -49,11 +49,16 @@ backup:
 	@echo "Sauvegardes disponibles dans ./backups/"
 
 # Renouvelle le certificat SSL Let's Encrypt et recharge nginx
+# (Inutile si REVERSE_PROXY=traefik — Traefik gère le SSL automatiquement)
 renew-certs:
-	@echo "Renouvellement des certificats SSL..."
-	@$(COMPOSE) run --rm certbot renew --quiet
-	@$(COMPOSE) exec nginx nginx -s reload
-	@echo "Certificats renouvelés."
+	@if [ "$${REVERSE_PROXY}" = "traefik" ]; then \
+		echo "Mode Traefik — les certificats sont gérés automatiquement par Traefik."; \
+	else \
+		echo "Renouvellement des certificats SSL..."; \
+		$(COMPOSE) run --rm certbot renew --quiet; \
+		$(COMPOSE) exec nginx nginx -s reload; \
+		echo "Certificats renouvelés."; \
+	fi
 
 # Ouvre un shell dans le conteneur Synapse
 shell-synapse:
