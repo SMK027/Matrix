@@ -163,17 +163,84 @@ docker compose exec synapse register_new_matrix_user \
 
 Le script demande interactivement un mot de passe.
 
----
+### Activer l'inscription publique
 
-## Connexion avec un client Matrix
+Par défaut, seul un administrateur peut créer des comptes (via `make admin`).
+Pour permettre aux utilisateurs de s'inscrire eux-mêmes, trois options sont disponibles.
 
-Utilisez l'un des clients suivants en configurant le serveur sur `https://matrix.mondomaine.fr` :
+#### Option 1 — Inscription avec captcha (recommandé)
 
-- [Element Web](https://app.element.io)
-- [Element Desktop / Mobile](https://element.io/download)
-- [FluffyChat](https://fluffychat.im)
-- [SchildiChat](https://schildi.chat)
-- [Cinny](https://cinny.in)
+Protège contre le spam en exigeant un reCAPTCHA Google lors de l'inscription.
+
+1. Créez des clés reCAPTCHA sur [Google reCAPTCHA Admin](https://www.google.com/recaptcha/admin) (type reCAPTCHA v2 « I'm not a robot »).
+
+2. Ajoutez dans `data/synapse/homeserver.yaml` :
+
+   ```yaml
+   enable_registration: true
+   enable_registration_captcha: true
+   recaptcha_public_key: "VOTRE_CLE_PUBLIQUE"
+   recaptcha_private_key: "VOTRE_CLE_PRIVEE"
+   ```
+
+3. Redémarrez Synapse :
+
+   ```bash
+   docker compose restart synapse
+   ```
+
+#### Option 2 — Inscription par token
+
+Les utilisateurs doivent fournir un token d'invitation pour s'inscrire. Idéal pour un serveur semi-privé.
+
+1. Ajoutez dans `data/synapse/homeserver.yaml` :
+
+   ```yaml
+   enable_registration: true
+   registration_requires_token: true
+   ```
+
+2. Redémarrez Synapse :
+
+   ```bash
+   docker compose restart synapse
+   ```
+
+3. Créez un token via l'API admin (remplacez `VOTRE_TOKEN_ADMIN` par un access token admin) :
+
+   ```bash
+   curl -s -X POST \
+     -H "Authorization: Bearer VOTRE_TOKEN_ADMIN" \
+     -H "Content-Type: application/json" \
+     http://localhost:8008/_synapse/admin/v1/registration_tokens/new \
+     -d '{"uses_allowed": 10}'
+   ```
+
+   Distribuez le token renvoyé aux personnes autorisées à s'inscrire.
+
+#### Option 3 — Inscription libre sans vérification (déconseillé)
+
+> **⚠️ Déconseillé en production** — expose le serveur au spam et à l'abus.
+
+```yaml
+enable_registration: true
+enable_registration_without_verification: true
+```
+
+### Compatibilité des clients
+
+| Client | Inscription classique | Nécessite MAS |
+|--------|----------------------|---------------|
+| [Element Web](https://app.element.io) | Oui | Non |
+| [Element Desktop](https://element.io/download) (classique) | Oui | Non |
+| [FluffyChat](https://fluffychat.im) | Oui | Non |
+| [SchildiChat](https://schildi.chat) | Oui | Non |
+| [Cinny](https://cinny.in) | Oui | Non |
+| **Element X** (mobile) | **Non** | **Oui** |
+
+> **Note sur Element X** : ce client exige Matrix Authentication Service (MAS),
+> un service d'authentification externe non inclus dans cette installation.
+> Utilisez Element classique ou un autre client compatible pour l'inscription et la connexion.
 
 ---
 
