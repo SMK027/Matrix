@@ -109,8 +109,8 @@ services:
     labels:
       - "traefik.enable=true"
       - "traefik.docker.network=proxy"
-      # Signaling WebSocket LiveKit — les clients se connectent à wss://DOMAIN/rtc
-      - "traefik.http.routers.livekit.rule=Host(`${MATRIX_DOMAIN}`) && PathPrefix(`/rtc`)"
+      # Signaling WebSocket (/rtc) + API Twirp (/twirp) — utilisés par les clients et lk-jwt-service
+      - "traefik.http.routers.livekit.rule=Host(`${MATRIX_DOMAIN}`) && (PathPrefix(`/rtc`) || PathPrefix(`/twirp`))"
       - "traefik.http.routers.livekit.entrypoints=websecure"
       - "traefik.http.routers.livekit.tls=true"
       - "traefik.http.routers.livekit.tls.certresolver=le"
