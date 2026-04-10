@@ -376,9 +376,9 @@ config['allow_public_rooms_without_auth']    = False
 # Element Call (VoIP/vidéo via MatrixRTC + LiveKit)
 livekit_url = os.environ.get('LIVEKIT_JWT_URL', '')
 if livekit_url:
-    # Flag expérimental : annonce org.matrix.msc4143 aux clients
+    # Flag expérimental : active l'endpoint /_matrix/client/unstable/org.matrix.msc4143/rtc/transports
     config.setdefault('experimental_features', {})
-    config['experimental_features']['msc4143_rtc_transport'] = True
+    config['experimental_features']['msc4143_enabled'] = True
     # Transport LiveKit effectif
     config['matrix_rtc'] = {
         'transports': [{
