@@ -28,6 +28,7 @@ Trois modes de déploiement sont supportés :
 - [Détail des fichiers](#détail-des-fichiers)
 - [Réseau et ports](#réseau-et-ports)
 - [Configuration Synapse (homeserver.yaml)](#configuration-synapse)
+- [Element Call (appels audio/vidéo)](#element-call-appels-audiovidéo)
 - [Mise à jour](#mise-à-jour)
 - [Dépannage](#dépannage)
 
@@ -473,6 +474,8 @@ Matrix/
 │   │   ├── *.log.config              # Configuration des logs Synapse
 │   │   └── media_store/              # Fichiers média uploadés
 │   ├── postgres/                     # Données PostgreSQL (volume)
+│   ├── livekit/
+│   │   └── livekit.yaml              # Configuration LiveKit (générée, optionnel)
 │   └── certbot/
 │       ├── conf/                     # Certificats Let's Encrypt
 │       └── www/                      # Challenge ACME webroot
@@ -495,6 +498,8 @@ Fichier Compose principal pour les modes **Traefik** et **Autonome**.
 | `postgres` | `postgres:16-alpine` | Base de données | `matrix-net` |
 | `nginx` | `nginx:alpine` | Reverse proxy (profil `local`) | `matrix-net` |
 | `certbot` | `certbot/certbot` | Certificats SSL (profil `local`) | — |
+| `livekit` | `livekit/livekit-server:latest` | SFU WebRTC (profil `calls`) | `matrix-net` |
+| `lk-jwt-service` | `ghcr.io/element-hq/lk-jwt-service` | Auth JWT LiveKit (profil `calls`) | `matrix-net`, `proxy` |
 
 - **Synapse** : expose le port 8008 (interne), connecté aux réseaux `matrix-net` et `proxy`. Les labels Traefik sont toujours présents mais n'ont d'effet que si Traefik est actif. Healthcheck sur `/health`.
 - **PostgreSQL** : initialisation automatique avec encodage UTF-8 et collation C (requis par Synapse). Healthcheck via `pg_isready`.
@@ -550,6 +555,7 @@ Tous les templates utilisent le placeholder `MATRIX_DOMAIN_PLACEHOLDER`, remplac
 | **Autonome** | 80 | nginx | HTTP → redirection HTTPS + challenge ACME |
 | **Autonome** | 443 | nginx | HTTPS → proxy vers Synapse |
 | **Autonome** | 8448 | nginx | Fédération Matrix (TLS) |
+| **Tous** (si Element Call) | 7882/udp | livekit | Trafic WebRTC média |
 | **Local** | 8090 (configurable) | nginx | HTTP → proxy vers Synapse |
 
 > En mode Traefik, aucun port n'est publié directement par les conteneurs de ce projet. Traefik route les requêtes via le réseau Docker `proxy`.
@@ -628,6 +634,98 @@ presence:
 | `form_secret` (dans yaml) | Secret pour les formulaires | ✔ |
 
 > **⚠️ Ne supprimez jamais la `signing.key`** — elle identifie votre serveur auprès des autres serveurs fédérés. Sa perte rend la fédération irréparable.
+
+---
+
+## Element Call (appels audio/vidéo)
+
+Element Call (MatrixRTC) permet les appels audio et vidéo depuis les clients Matrix modernes. Il repose sur un serveur **LiveKit** (SFU — Selective Forwarding Unit) qui relaie les flux média WebRTC.
+
+### Prérequis
+
+- Un nom de domaine avec HTTPS (les clients récupèrent la config via l’API Synapse)
+- Le port **7882/udp** ouvert sur le pare-feu (trafic WebRTC média)
+
+### Activation
+
+1. **Générez une paire clé/secret LiveKit** (chaînes aléatoires, par exemple via `openssl rand -base64 32`) :
+
+   ```bash
+   # Exemple
+   LIVEKIT_API_KEY=$(openssl rand -hex 16)
+   LIVEKIT_API_SECRET=$(openssl rand -base64 32)
+   echo "LIVEKIT_API_KEY=$LIVEKIT_API_KEY"
+   echo "LIVEKIT_API_SECRET=$LIVEKIT_API_SECRET"
+   ```
+
+2. **Ajoutez dans votre `.env`** :
+
+   ```dotenv
+   # Element Call (LiveKit)
+   LIVEKIT_URL=wss://matrix.mondomaine.fr:7881
+   LIVEKIT_API_KEY=votre_cle_generee
+   LIVEKIT_API_SECRET=votre_secret_genere
+   ```
+
+   > `LIVEKIT_URL` est l’URL WebSocket publique utilisée par les clients pour se connecter au serveur LiveKit.
+
+3. **Relancez `setup.sh`** (ou redéployez manuellement) :
+
+   ```bash
+   sudo bash setup.sh
+   ```
+
+   Le script :
+   - Génère `data/livekit/livekit.yaml` avec la clé/secret
+   - Configure `matrix_rtc.transports` dans `homeserver.yaml` (transport LiveKit)
+   - Démarre les conteneurs `livekit` et `lk-jwt-service` via le profil `calls`
+
+### Vérification
+
+Vérifiez que Synapse annonce le support MatrixRTC :
+
+```bash
+curl -s https://votre.domaine/_matrix/client/versions | python3 -c "
+import sys, json
+data = json.load(sys.stdin)
+print('MatrixRTC:', 'OK' if data.get('unstable_features', {}).get('org.matrix.msc4143') else 'NON ACTIF')
+"
+```
+
+### Architecture
+
+```
+Client (Element) ───────→ Synapse ───────→ lk-jwt-service
+    │                      (matrix_rtc)        (JWT auth)
+    │                                               │
+    └── WebRTC média ──────→ LiveKit Server ◀─────┘
+                          (SFU, port 7882/udp)
+```
+
+1. Le client demande à Synapse le transport RTC configuré (via `/_matrix/client/versions`)
+2. Synapse redirige vers `lk-jwt-service` pour l’authentification (JWT)
+3. Le client se connecte directement au serveur LiveKit pour les flux média
+
+### Pare-feu
+
+| Port | Protocole | Usage |
+|------|-----------|-------|
+| 7882 | UDP | Trafic WebRTC média (LiveKit) |
+| 443 | TCP | API JWT via Traefik/Nginx (déjà ouvert) |
+
+```bash
+# Exemple avec ufw
+sudo ufw allow 7882/udp comment "LiveKit WebRTC"
+```
+
+### Désactiver Element Call
+
+Retirez (ou commentez) les variables `LIVEKIT_*` du `.env`, puis relancez :
+
+```bash
+docker compose down
+sudo bash setup.sh
+```
 
 ---
 

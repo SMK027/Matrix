@@ -91,7 +91,44 @@ services:
     volumes:
       - ./data/certbot/conf:/etc/letsencrypt
       - ./data/certbot/www:/var/www/certbot
+  # ── LiveKit Server (SFU pour Element Call) ──────────────────────────────────
+  livekit:
+    image: livekit/livekit-server:latest
+    container_name: matrix-livekit
+    profiles: ["calls"]
+    restart: unless-stopped
+    command: --config /etc/livekit.yaml
+    volumes:
+      - ./data/livekit/livekit.yaml:/etc/livekit.yaml:ro
+    networks:
+      - matrix-net
+    ports:
+      # UDP pour le trafic WebRTC média
+      - "7882:7882/udp"
 
+  # ── LiveKit JWT Service (auth pour Element Call) ─────────────────────
+  lk-jwt-service:
+    image: ghcr.io/element-hq/lk-jwt-service:latest
+    container_name: matrix-lk-jwt
+    profiles: ["calls"]
+    restart: unless-stopped
+    environment:
+      LIVEKIT_URL: ${LIVEKIT_URL:?LIVEKIT_URL est requis pour Element Call}
+      LIVEKIT_KEY: ${LIVEKIT_API_KEY:?LIVEKIT_API_KEY est requis pour Element Call}
+      LIVEKIT_SECRET: ${LIVEKIT_API_SECRET:?LIVEKIT_API_SECRET est requis pour Element Call}
+    networks:
+      - matrix-net
+      - proxy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=proxy"
+      - "traefik.http.routers.lk-jwt.rule=Host(`${MATRIX_DOMAIN}`) && PathPrefix(`/livekit/jwt`)"
+      - "traefik.http.routers.lk-jwt.entrypoints=websecure"
+      - "traefik.http.routers.lk-jwt.tls=true"
+      - "traefik.http.routers.lk-jwt.tls.certresolver=le"
+      - "traefik.http.middlewares.lk-jwt-strip.stripprefix.prefixes=/livekit/jwt"
+      - "traefik.http.routers.lk-jwt.middlewares=lk-jwt-strip"
+      - "traefik.http.services.lk-jwt.loadbalancer.server.port=8080"
 networks:
   matrix-net:
     driver: bridge

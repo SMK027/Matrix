@@ -248,11 +248,28 @@ load_env() {
 
     # Détection mode local (domaine = localhost ou 127.x.x.x)
     LOCAL_MODE=false
-    if [[ "${MATRIX_DOMAIN}" == "localhost" || "${MATRIX_DOMAIN}" =~ ^127\. ]]; then
+    if [[ "${MATRIX_DOMAIN}" == "localhost" || "${MATRIX_DOMAIN}" =~ ^127\. || "${MATRIX_DOMAIN}" =~ \.localhost$ ]]; then
         LOCAL_MODE=true
         warn "Mode LOCAL détecté (${MATRIX_DOMAIN}) — SSL et certbot désactivés."
     fi
     export LOCAL_MODE
+
+    # Element Call (LiveKit) — optionnel
+    export LIVEKIT_API_KEY="${LIVEKIT_API_KEY:-}"
+    export LIVEKIT_API_SECRET="${LIVEKIT_API_SECRET:-}"
+    export LIVEKIT_URL="${LIVEKIT_URL:-}"
+    if [[ -n "${LIVEKIT_API_KEY}" && -n "${LIVEKIT_API_SECRET}" && -n "${LIVEKIT_URL}" ]]; then
+        info "Element Call (LiveKit) activé."
+        if [[ "${TRAEFIK_MODE}" == "true" ]]; then
+            export LIVEKIT_JWT_URL="https://${MATRIX_DOMAIN}/livekit/jwt"
+        elif [[ "${LOCAL_MODE}" == "true" ]]; then
+            export LIVEKIT_JWT_URL="http://${MATRIX_DOMAIN}:${HTTP_PORT}/livekit/jwt"
+        else
+            export LIVEKIT_JWT_URL="https://${MATRIX_DOMAIN}/livekit/jwt"
+        fi
+    else
+        export LIVEKIT_JWT_URL=""
+    fi
 
     success "Domaine Matrix      : ${MATRIX_DOMAIN}"
     success "Nom du serveur      : ${MATRIX_SERVER_NAME}"
@@ -272,6 +289,7 @@ create_directories() {
         data/postgres \
         data/certbot/conf \
         data/certbot/www \
+        data/livekit \
         nginx/conf.d
     success "Répertoires créés dans ./data/"
 }
@@ -355,9 +373,17 @@ config['enable_registration'] = (
 config['allow_public_rooms_over_federation'] = False
 config['allow_public_rooms_without_auth']    = False
 
-# Element Call (VoIP/vidéo) — nécessite MSC4143 RTC transport
-config.setdefault('experimental_features', {})
-config['experimental_features']['msc4143_rtc_transport'] = True
+# Element Call (VoIP/vidéo via MatrixRTC + LiveKit)
+livekit_url = os.environ.get('LIVEKIT_JWT_URL', '')
+if livekit_url:
+    config['matrix_rtc'] = {
+        'transports': [{
+            'type': 'livekit',
+            'livekit_service_url': livekit_url,
+        }]
+    }
+    # MSC4140 : Delayed events (nécessaire pour la signalisation Element Call)
+    config['max_event_delay_duration'] = '24h'
 
 with open(cfg_path, 'w') as f:
     yaml.dump(config, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
@@ -379,11 +405,34 @@ PYEOF
         -e "LOCAL_MODE=${LOCAL_MODE}" \
         -e "HTTP_PORT=${HTTP_PORT}" \
         -e "TRAEFIK_MODE=${TRAEFIK_MODE}" \
+        -e "LIVEKIT_JWT_URL=${LIVEKIT_JWT_URL}" \
         matrixdotorg/synapse:latest /tmp/configure.py
 
     rm -f "${py_script}"
 
     success "homeserver.yaml prêt dans data/synapse/"
+}
+
+# ── 5b. Config LiveKit (optionnel — Element Call) ────────────────────────────
+generate_livekit_config() {
+    if [[ -z "${LIVEKIT_API_KEY}" ]]; then
+        return
+    fi
+
+    step "Génération de la configuration LiveKit"
+
+    cat > data/livekit/livekit.yaml << EOF
+port: 7880
+rtc:
+  port_range_start: 50000
+  port_range_end: 60000
+  udp_port: 7882
+  tcp_port: 7881
+keys:
+  ${LIVEKIT_API_KEY}: ${LIVEKIT_API_SECRET}
+EOF
+
+    success "data/livekit/livekit.yaml généré."
 }
 
 # ── 6. Démarrage nginx (HTTP) ─────────────────────────────────────────────────
@@ -454,7 +503,13 @@ setup_nginx_https() {
 # ── 9. Démarrage de tous les services ────────────────────────────────────────
 start_all_services() {
     step "Démarrage de tous les services"
-    compose up -d
+
+    local profiles=()
+    if [[ -n "${LIVEKIT_API_KEY}" ]]; then
+        profiles+=("--profile" "calls")
+    fi
+
+    compose "${profiles[@]}" up -d
 
     info "Attente du démarrage de Synapse (60 secondes max)..."
     local retries=12
@@ -505,6 +560,7 @@ main() {
     create_directories
     setup_nginx_init
     generate_synapse_config
+    generate_livekit_config
     start_nginx
     obtain_ssl_certificate
     setup_nginx_https
