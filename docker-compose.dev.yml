@@ -89,6 +89,9 @@ services:
     networks:
       - matrix-net
     ports:
+      # Signaling WebSocket LiveKit (accès direct en dev)
+      - "7880:7880"
+      # UDP pour le trafic WebRTC média
       - "7882:7882/udp"
 
   # ── LiveKit JWT Service (auth pour Element Call) ─────────────────────

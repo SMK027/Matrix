@@ -258,8 +258,20 @@ load_env() {
     export LIVEKIT_API_KEY="${LIVEKIT_API_KEY:-}"
     export LIVEKIT_API_SECRET="${LIVEKIT_API_SECRET:-}"
     export LIVEKIT_URL="${LIVEKIT_URL:-}"
-    if [[ -n "${LIVEKIT_API_KEY}" && -n "${LIVEKIT_API_SECRET}" && -n "${LIVEKIT_URL}" ]]; then
+    if [[ -n "${LIVEKIT_API_KEY}" && -n "${LIVEKIT_API_SECRET}" ]]; then
         info "Element Call (LiveKit) activé."
+        # LIVEKIT_URL : URL WebSocket publique pour le signaling LiveKit.
+        # En mode Traefik/nginx, le signaling est routé via /rtc sur le même domaine.
+        if [[ -z "${LIVEKIT_URL}" ]]; then
+            if [[ "${TRAEFIK_MODE}" == "true" ]]; then
+                export LIVEKIT_URL="wss://${MATRIX_DOMAIN}"
+            elif [[ "${LOCAL_MODE}" == "true" ]]; then
+                export LIVEKIT_URL="ws://${MATRIX_DOMAIN}:${HTTP_PORT}"
+            else
+                export LIVEKIT_URL="wss://${MATRIX_DOMAIN}"
+            fi
+            info "LIVEKIT_URL déduit automatiquement : ${LIVEKIT_URL}"
+        fi
         if [[ "${TRAEFIK_MODE}" == "true" ]]; then
             export LIVEKIT_JWT_URL="https://${MATRIX_DOMAIN}/livekit/jwt"
         elif [[ "${LOCAL_MODE}" == "true" ]]; then

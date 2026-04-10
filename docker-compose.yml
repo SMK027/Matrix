@@ -102,9 +102,19 @@ services:
       - ./data/livekit/livekit.yaml:/etc/livekit.yaml:ro
     networks:
       - matrix-net
+      - proxy
     ports:
       # UDP pour le trafic WebRTC média
       - "7882:7882/udp"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=proxy"
+      # Signaling WebSocket LiveKit — les clients se connectent à wss://DOMAIN/rtc
+      - "traefik.http.routers.livekit.rule=Host(`${MATRIX_DOMAIN}`) && PathPrefix(`/rtc`)"
+      - "traefik.http.routers.livekit.entrypoints=websecure"
+      - "traefik.http.routers.livekit.tls=true"
+      - "traefik.http.routers.livekit.tls.certresolver=le"
+      - "traefik.http.services.livekit.loadbalancer.server.port=7880"
 
   # ── LiveKit JWT Service (auth pour Element Call) ─────────────────────
   lk-jwt-service:
