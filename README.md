@@ -643,7 +643,7 @@ Element Call (MatrixRTC) permet les appels audio et vidéo depuis les clients Ma
 
 ### Prérequis
 
-- Un nom de domaine avec HTTPS (les clients récupèrent la config via l’API Synapse)
+- Un nom de domaine avec HTTPS (les clients découvrent la config via `.well-known/matrix/client`)
 - Le port **7882/udp** ouvert sur le pare-feu (trafic WebRTC média)
 
 ### Activation
@@ -678,18 +678,24 @@ Element Call (MatrixRTC) permet les appels audio et vidéo depuis les clients Ma
    Le script :
    - Génère `data/livekit/livekit.yaml` avec la clé/secret
    - Configure `matrix_rtc.transports` dans `homeserver.yaml` (transport LiveKit)
+   - Ajoute `extra_well_known_client_content` avec `org.matrix.msc4143.rtc_foci` (découverte par les clients)
    - Démarre les conteneurs `livekit` et `lk-jwt-service` via le profil `calls`
 
 ### Vérification
 
-Vérifiez que Synapse annonce le support MatrixRTC :
+Vérifiez que le `.well-known` annonce le focus RTC :
 
 ```bash
-curl -s https://votre.domaine/_matrix/client/versions | python3 -c "
-import sys, json
-data = json.load(sys.stdin)
-print('MatrixRTC:', 'OK' if data.get('unstable_features', {}).get('org.matrix.msc4143') else 'NON ACTIF')
-"
+curl -s https://votre.domaine/.well-known/matrix/client | python3 -m json.tool
+```
+
+Vous devez voir la clé `org.matrix.msc4143.rtc_foci` contenant l'URL du service JWT LiveKit.
+
+Vérifiez aussi que l'endpoint MatrixRTC est actif :
+
+```bash
+curl -s https://votre.domaine/_matrix/client/unstable/org.matrix.msc4143/rtc/transports
+# Doit retourner {"errcode":"M_MISSING_TOKEN",...} (authentification requise = endpoint actif)
 ```
 
 ### Architecture
@@ -702,8 +708,8 @@ Client (Element) ───────→ Synapse ───────→ lk-jw
                           (SFU, port 7882/udp)
 ```
 
-1. Le client demande à Synapse le transport RTC configuré (via `/_matrix/client/versions`)
-2. Synapse redirige vers `lk-jwt-service` pour l’authentification (JWT)
+1. Le client découvre le focus RTC via `.well-known/matrix/client` (`org.matrix.msc4143.rtc_foci`)
+2. Le client demande un JWT à `lk-jwt-service` (via l'URL du focus)
 3. Le client se connecte directement au serveur LiveKit pour les flux média
 
 ### Pare-feu
