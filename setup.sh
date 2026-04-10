@@ -355,6 +355,10 @@ config['enable_registration'] = (
 config['allow_public_rooms_over_federation'] = False
 config['allow_public_rooms_without_auth']    = False
 
+# Element Call (VoIP/vidéo) — nécessite MSC4143 RTC transport
+config.setdefault('experimental_features', {})
+config['experimental_features']['msc4143_rtc_transport'] = True
+
 with open(cfg_path, 'w') as f:
     yaml.dump(config, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
 
