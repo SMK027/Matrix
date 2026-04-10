@@ -386,6 +386,13 @@ if livekit_url:
             'livekit_service_url': livekit_url,
         }]
     }
+    # Annonce du focus RTC dans .well-known/matrix/client (découverte Element X / Element Call)
+    config['extra_well_known_client_content'] = {
+        'org.matrix.msc4143.rtc_foci': [{
+            'type': 'livekit',
+            'livekit_service_url': livekit_url,
+        }]
+    }
     # MSC4140 : Delayed events (nécessaire pour la signalisation Element Call)
     config['max_event_delay_duration'] = '24h'
 
